@@ -265,6 +265,24 @@ export default function Home() {
     }
   }
 
+  // Generate filename with site name and timestamp
+  const generateFilename = (format: 'zip' | 'md') => {
+    // Try to extract site name from URL
+    let siteName = 'docs'
+    if (url) {
+      try {
+        const urlObj = new URL(url)
+        siteName = urlObj.hostname.replace(/^www\./, '').split('.')[0]
+      } catch {}
+    }
+    
+    // Generate timestamp: YYYYMMDD_HHmm
+    const now = new Date()
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+    
+    return `${siteName}_${timestamp}.${format}`
+  }
+
   const handleDownloadSite = async (format: 'zip' | 'merged') => {
     // Check if we have cached markdowns from the crawl
     const successfulPages = crawledPages.filter(p => p.success)
@@ -274,6 +292,7 @@ export default function Home() {
     }
 
     setDownloadLoading(format)
+    const filename = generateFilename(format === 'zip' ? 'zip' : 'md')
     
     try {
       // If we have cached markdowns, use them directly (much faster)
@@ -298,7 +317,7 @@ export default function Home() {
           const downloadUrl = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = downloadUrl
-          a.download = 'complete_docs.md'
+          a.download = filename
           document.body.appendChild(a)
           a.click()
           document.body.removeChild(a)
@@ -320,7 +339,7 @@ export default function Home() {
           const downloadUrl = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = downloadUrl
-          a.download = 'docs.zip'
+          a.download = filename
           document.body.appendChild(a)
           a.click()
           document.body.removeChild(a)
@@ -343,7 +362,7 @@ export default function Home() {
         const downloadUrl = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = downloadUrl
-        a.download = format === 'zip' ? 'docs.zip' : 'complete_docs.md'
+        a.download = filename
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
