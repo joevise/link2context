@@ -7,11 +7,12 @@ from pathlib import Path
 
 from app.parsers import WeChatParser, StaticParser, DynamicParser
 from app.pdf_generator import PDFGenerator
+from app.ocr_service import OCRService, OCRConfig
 
 app = FastAPI(
     title="Link2Context API",
     description="Convert web pages to clean Markdown for LLMs",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 # CORS for frontend
@@ -49,6 +50,32 @@ class ConvertResponse(BaseModel):
 class PDFRequest(BaseModel):
     markdown: str
     title: str = "Document"
+
+
+class OCRConfigRequest(BaseModel):
+    provider: str = "openai"  # openai, claude, custom
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str
+    model: str = "gpt-4o"
+    prompt: Optional[str] = None
+
+
+class OCRRequest(BaseModel):
+    image_paths: List[str]
+    config: OCRConfigRequest
+
+
+class OCRResultItem(BaseModel):
+    success: bool
+    image_path: str
+    text: Optional[str] = None
+    error: Optional[str] = None
+
+
+class OCRResponse(BaseModel):
+    status: str
+    results: List[OCRResultItem] = []
+    error: Optional[str] = None
 
 
 # Initialize parsers
@@ -192,6 +219,39 @@ def generate_pdf(request: PDFRequest):
         raise HTTPException(
             status_code=500,
             detail=f"PDF generation failed: {str(e)}"
+        )
+
+
+@app.post("/api/ocr", response_model=OCRResponse)
+async def recognize_images(request: OCRRequest):
+    """Recognize text in images using AI vision models"""
+    try:
+        config = OCRConfig(
+            provider=request.config.provider,
+            base_url=request.config.base_url,
+            api_key=request.config.api_key,
+            model=request.config.model,
+            prompt=request.config.prompt or ""
+        )
+        
+        ocr_service = OCRService(config)
+        results = await ocr_service.recognize_images(request.image_paths)
+        
+        return OCRResponse(
+            status="success",
+            results=[
+                OCRResultItem(
+                    success=r.success,
+                    image_path=r.image_path,
+                    text=r.text,
+                    error=r.error
+                ) for r in results
+            ]
+        )
+    except Exception as e:
+        return OCRResponse(
+            status="error",
+            error=str(e)
         )
 
 
