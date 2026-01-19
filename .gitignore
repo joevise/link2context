@@ -8,6 +8,9 @@ venv/
 .venv/
 env/
 
+# Cache
+backend/app/cache/
+
 # Build outputs
 .next/
 out/
