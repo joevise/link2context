@@ -8,11 +8,13 @@ from pathlib import Path
 from app.parsers import WeChatParser, StaticParser, DynamicParser
 from app.pdf_generator import PDFGenerator
 from app.ocr_service import OCRService, OCRConfig
+from app.site_analyzer import SiteAnalyzer, AnalyzerConfig
+from app.batch_crawler import BatchCrawler
 
 app = FastAPI(
     title="Link2Context API",
     description="Convert web pages to clean Markdown for LLMs",
-    version="2.1.0"
+    version="3.0.0"
 )
 
 # CORS for frontend
@@ -76,6 +78,56 @@ class OCRResponse(BaseModel):
     status: str
     results: List[OCRResultItem] = []
     error: Optional[str] = None
+
+
+# Site crawl models
+class AnalyzerConfigRequest(BaseModel):
+    provider: str = "openai"
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    model: str = "gpt-4o-mini"
+    prompt: Optional[str] = None
+
+
+class AnalyzeSiteRequest(BaseModel):
+    url: str
+    config: AnalyzerConfigRequest
+
+
+class PageInfo(BaseModel):
+    url: str
+    title: str
+
+
+class AnalyzeSiteResponse(BaseModel):
+    status: str
+    pages: List[PageInfo] = []
+    error: Optional[str] = None
+
+
+class CrawlSiteRequest(BaseModel):
+    pages: List[PageInfo]
+    max_pages: int = 50
+
+
+class CrawledPage(BaseModel):
+    url: str
+    title: str
+    filename: str
+    success: bool
+    error: Optional[str] = None
+
+
+class CrawlSiteResponse(BaseModel):
+    status: str
+    pages: List[CrawledPage] = []
+    error: Optional[str] = None
+
+
+class DownloadRequest(BaseModel):
+    pages: List[PageInfo]
+    max_pages: int = 50
+    format: str = "zip"  # zip or merged
 
 
 # Initialize parsers
@@ -252,6 +304,102 @@ async def recognize_images(request: OCRRequest):
         return OCRResponse(
             status="error",
             error=str(e)
+        )
+
+
+@app.post("/api/analyze-site", response_model=AnalyzeSiteResponse)
+async def analyze_site(request: AnalyzeSiteRequest):
+    """Analyze a website to discover documentation pages"""
+    try:
+        config = AnalyzerConfig(
+            provider=request.config.provider,
+            base_url=request.config.base_url,
+            api_key=request.config.api_key,
+            model=request.config.model,
+            prompt=request.config.prompt or ""
+        )
+        
+        analyzer = SiteAnalyzer(config)
+        result = await analyzer.analyze(request.url)
+        
+        if result.success:
+            return AnalyzeSiteResponse(
+                status="success",
+                pages=[PageInfo(url=p['url'], title=p['title']) for p in result.pages]
+            )
+        else:
+            return AnalyzeSiteResponse(
+                status="error",
+                error=result.error
+            )
+    except Exception as e:
+        return AnalyzeSiteResponse(
+            status="error",
+            error=str(e)
+        )
+
+
+@app.post("/api/crawl-site", response_model=CrawlSiteResponse)
+def crawl_site(request: CrawlSiteRequest):
+    """Crawl multiple pages from a site"""
+    try:
+        crawler = BatchCrawler()
+        pages_dict = [{"url": p.url, "title": p.title} for p in request.pages]
+        results = crawler.crawl_batch_sync(pages_dict, request.max_pages)
+        
+        return CrawlSiteResponse(
+            status="success",
+            pages=[
+                CrawledPage(
+                    url=r.url,
+                    title=r.title,
+                    filename=r.filename,
+                    success=r.success,
+                    error=r.error
+                ) for r in results
+            ]
+        )
+    except Exception as e:
+        return CrawlSiteResponse(
+            status="error",
+            error=str(e)
+        )
+
+
+@app.post("/api/download-site")
+def download_site(request: DownloadRequest):
+    """Download crawled site as ZIP or merged markdown"""
+    try:
+        import urllib.parse
+        
+        crawler = BatchCrawler()
+        pages_dict = [{"url": p.url, "title": p.title} for p in request.pages]
+        results = crawler.crawl_batch_sync(pages_dict, request.max_pages)
+        
+        if request.format == "merged":
+            # Merge into single markdown
+            merged_content = crawler.merge_markdown(results)
+            return Response(
+                content=merged_content.encode('utf-8'),
+                media_type="text/markdown",
+                headers={
+                    "Content-Disposition": "attachment; filename*=UTF-8''complete_docs.md"
+                }
+            )
+        else:
+            # Create ZIP
+            zip_bytes = crawler.create_zip(results)
+            return Response(
+                content=zip_bytes,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": "attachment; filename*=UTF-8''docs.zip"
+                }
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Download failed: {str(e)}"
         )
 
 
