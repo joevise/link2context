@@ -24,10 +24,13 @@ class StaticParser(BaseParser):
                 "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
             }
 
+            print(f"    [Static] Fetching: {url[:60]}...")
             response = requests.get(url, headers=headers, timeout=30)
+            print(f"    [Static] Status: {response.status_code}, Size: {len(response.text)} chars")
 
             # Check for blocking
             if response.status_code in [403, 401]:
+                print(f"    [Static] Access blocked!")
                 return ParseResult(success=False, error="Access blocked - need dynamic parser")
 
             response.raise_for_status()
@@ -55,6 +58,7 @@ class StaticParser(BaseParser):
             content = self._extract_main_content(soup)
 
             if not content:
+                print(f"    [Static] No main content found!")
                 return ParseResult(success=False, error="Could not extract main content")
 
             # Download and cache images
@@ -68,7 +72,9 @@ class StaticParser(BaseParser):
             markdown_content = re.sub(r'^\s+', '', markdown_content, flags=re.MULTILINE)
             markdown_content = markdown_content.strip()
 
+            print(f"    [Static] Markdown length: {len(markdown_content)} chars")
             if len(markdown_content) < 50:
+                print(f"    [Static] Content too short!")
                 return ParseResult(success=False, error="Content too short - may need dynamic parser")
 
             full_markdown = f"# {title}\n\n{markdown_content}"

@@ -101,8 +101,10 @@ export default function Home() {
   const [discoveredPages, setDiscoveredPages] = useState<PageInfo[]>([])
   const [selectedPages, setSelectedPages] = useState<Set<string>>(new Set())
   const [crawledPages, setCrawledPages] = useState<CrawledPage[]>([])
-  const [crawlProgress, setCrawlProgress] = useState({ current: 0, total: 0, status: '' })
+  const [crawlProgress, setCrawlProgress] = useState({ current: 0, total: 0, status: '', currentTitle: '' })
   const [showPageList, setShowPageList] = useState(false)
+  const [downloadLoading, setDownloadLoading] = useState<string | null>(null) // 'zip' | 'merged' | null
+  const [crawledMarkdowns, setCrawledMarkdowns] = useState<Record<string, string>>({}) // url -> markdown
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -180,10 +182,12 @@ export default function Home() {
     if (pagesToCrawl.length === 0) return
 
     setLoading(true)
-    setCrawlProgress({ current: 0, total: pagesToCrawl.length, status: 'crawling' })
+    setCrawlProgress({ current: 0, total: pagesToCrawl.length, status: 'crawling', currentTitle: '' })
+    setCrawledPages([])
+    setCrawledMarkdowns({})
 
     try {
-      const response = await fetch(`${API_URL}/api/crawl-site`, {
+      const response = await fetch(`${API_URL}/api/crawl-site-stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -191,50 +195,164 @@ export default function Home() {
           max_pages: maxPages
         }),
       })
-      const data = await response.json()
-      
-      if (data.status === 'success') {
-        setCrawledPages(data.pages)
-        setCrawlProgress({ current: data.pages.length, total: data.pages.length, status: 'done' })
-      } else {
-        alert(data.error || '抓取失败')
+
+      if (!response.body) {
+        throw new Error('No response body')
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      const tempPages: CrawledPage[] = []
+      const tempMarkdowns: Record<string, string> = {}
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              
+              if (data.type === 'progress') {
+                setCrawlProgress({
+                  current: data.current,
+                  total: data.total,
+                  status: 'crawling',
+                  currentTitle: data.title
+                })
+              } else if (data.type === 'page') {
+                tempPages.push({
+                  url: data.url,
+                  title: data.title,
+                  filename: data.filename,
+                  success: data.success,
+                  error: data.error
+                })
+                setCrawledPages([...tempPages])
+              } else if (data.type === 'complete') {
+                // Store markdowns for download
+                data.pages.forEach((p: any) => {
+                  if (p.success && p.markdown) {
+                    tempMarkdowns[p.url] = p.markdown
+                  }
+                })
+                setCrawledMarkdowns(tempMarkdowns)
+                setCrawlProgress({
+                  current: data.total,
+                  total: data.total,
+                  status: 'done',
+                  currentTitle: ''
+                })
+              }
+            } catch (e) {
+              console.error('Failed to parse SSE data:', e)
+            }
+          }
+        }
       }
     } catch (error) {
+      console.error('Crawl error:', error)
       alert('抓取失败，请检查网络连接')
+      setCrawlProgress({ current: 0, total: 0, status: '', currentTitle: '' })
     } finally {
       setLoading(false)
     }
   }
 
   const handleDownloadSite = async (format: 'zip' | 'merged') => {
-    const pagesToDownload = discoveredPages.filter(p => selectedPages.has(p.url)).slice(0, maxPages)
-    if (pagesToDownload.length === 0) return
+    // Check if we have cached markdowns from the crawl
+    const successfulPages = crawledPages.filter(p => p.success)
+    if (successfulPages.length === 0) {
+      alert('没有可下载的内容')
+      return
+    }
 
-    setLoading(true)
+    setDownloadLoading(format)
+    
     try {
-      const response = await fetch(`${API_URL}/api/download-site`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pages: pagesToDownload,
-          max_pages: maxPages,
-          format
-        }),
-      })
+      // If we have cached markdowns, use them directly (much faster)
+      if (Object.keys(crawledMarkdowns).length > 0) {
+        if (format === 'merged') {
+          // Create merged markdown locally
+          let merged = '# 完整文档\n\n'
+          merged += `共 ${successfulPages.length} 个页面\n\n---\n\n`
+          
+          successfulPages.forEach((page, i) => {
+            const md = crawledMarkdowns[page.url] || ''
+            if (md) {
+              merged += `## 第${i + 1}章: ${page.title}\n\n`
+              merged += `*来源: ${page.url}*\n\n`
+              // Remove first heading if exists
+              const content = md.replace(/^# .+\n/, '').trim()
+              merged += content + '\n\n---\n\n'
+            }
+          })
+          
+          const blob = new Blob([merged], { type: 'text/markdown' })
+          const downloadUrl = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = downloadUrl
+          a.download = 'complete_docs.md'
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+          URL.revokeObjectURL(downloadUrl)
+        } else {
+          // Create ZIP using JSZip or fallback to server
+          // For simplicity, use server API for ZIP
+          const response = await fetch(`${API_URL}/api/download-site`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pages: successfulPages.map(p => ({ url: p.url, title: p.title })),
+              max_pages: maxPages,
+              format: 'zip'
+            }),
+          })
 
-      const blob = await response.blob()
-      const downloadUrl = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = downloadUrl
-      a.download = format === 'zip' ? 'docs.zip' : 'complete_docs.md'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(downloadUrl)
+          const blob = await response.blob()
+          const downloadUrl = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = downloadUrl
+          a.download = 'docs.zip'
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+          URL.revokeObjectURL(downloadUrl)
+        }
+      } else {
+        // No cached data, need to crawl again
+        const pagesToDownload = discoveredPages.filter(p => selectedPages.has(p.url)).slice(0, maxPages)
+        const response = await fetch(`${API_URL}/api/download-site`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pages: pagesToDownload,
+            max_pages: maxPages,
+            format
+          }),
+        })
+
+        const blob = await response.blob()
+        const downloadUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = downloadUrl
+        a.download = format === 'zip' ? 'docs.zip' : 'complete_docs.md'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(downloadUrl)
+      }
     } catch (error) {
       alert('下载失败')
     } finally {
-      setLoading(false)
+      setDownloadLoading(null)
     }
   }
 
@@ -497,12 +615,17 @@ export default function Home() {
             {/* Progress */}
             {crawlProgress.status === 'crawling' && (
               <div className="px-6 py-3 bg-blue-50 border-t border-blue-100">
-                <div className="flex items-center gap-3">
-                  <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                  <span className="text-sm text-blue-700">正在抓取: {crawlProgress.current}/{crawlProgress.total}</span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                    <span className="text-sm text-blue-700">正在抓取: {crawlProgress.current}/{crawlProgress.total}</span>
+                  </div>
+                  {crawlProgress.currentTitle && (
+                    <span className="text-xs text-blue-500 truncate max-w-[200px]">{crawlProgress.currentTitle}</span>
+                  )}
                 </div>
                 <div className="mt-2 h-2 bg-blue-200 rounded-full overflow-hidden">
-                  <div className="h-full bg-blue-600 transition-all" style={{ width: `${(crawlProgress.current / crawlProgress.total) * 100}%` }} />
+                  <div className="h-full bg-blue-600 transition-all duration-300" style={{ width: `${(crawlProgress.current / crawlProgress.total) * 100}%` }} />
                 </div>
               </div>
             )}
@@ -525,11 +648,13 @@ export default function Home() {
                 </button>
               ) : (
                 <>
-                  <button onClick={() => handleDownloadSite('zip')} disabled={loading} className="flex items-center gap-2 px-4 py-2 bg-black text-white font-medium rounded-lg hover:bg-slate-800 disabled:opacity-50">
-                    <FileArchive className="w-4 h-4" /> 下载压缩包
+                  <button onClick={() => handleDownloadSite('zip')} disabled={loading || downloadLoading !== null} className="flex items-center gap-2 px-4 py-2 bg-black text-white font-medium rounded-lg hover:bg-slate-800 disabled:opacity-50">
+                    {downloadLoading === 'zip' ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileArchive className="w-4 h-4" />}
+                    {downloadLoading === 'zip' ? '正在打包...' : '下载压缩包'}
                   </button>
-                  <button onClick={() => handleDownloadSite('merged')} disabled={loading} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-medium rounded-lg hover:from-purple-700 hover:to-blue-700 disabled:opacity-50">
-                    <Package className="w-4 h-4" /> 合并成一个Markdown
+                  <button onClick={() => handleDownloadSite('merged')} disabled={loading || downloadLoading !== null} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-medium rounded-lg hover:from-purple-700 hover:to-blue-700 disabled:opacity-50">
+                    {downloadLoading === 'merged' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Package className="w-4 h-4" />}
+                    {downloadLoading === 'merged' ? '正在合并...' : '合并成一个Markdown'}
                   </button>
                 </>
               )}

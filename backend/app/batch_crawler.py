@@ -50,6 +50,99 @@ class BatchCrawler:
         
         return f"{name}.md"
     
+    def crawl_single_page(self, url: str, title: str = "") -> PageResult:
+        """Crawl a single page - used by SSE streaming endpoint"""
+        print(f"  Crawling: {title[:30]}... ({url[:50]})")
+        
+        try:
+            # Try static parser first
+            result = self.static_parser.parse(url)
+            
+            # Check if page requires login
+            if result.success and self._requires_login(result.markdown):
+                print(f"  ⚠ Detected login required, skipping...")
+                return PageResult(
+                    url=url,
+                    title=title or url,
+                    filename=self._sanitize_filename(title, url),
+                    markdown="",
+                    success=False,
+                    error="Requires login"
+                )
+            
+            # If static failed, check if it's worth trying dynamic
+            if not result.success:
+                error_msg = result.error or ""
+                
+                # Skip dynamic for pages that are clearly inaccessible
+                if "too short" in error_msg.lower() or "blocked" in error_msg.lower():
+                    print(f"  ⚠ Static got no content, skipping...")
+                    return PageResult(
+                        url=url,
+                        title=title or url,
+                        filename=self._sanitize_filename(title, url),
+                        markdown="",
+                        success=False,
+                        error="No accessible content"
+                    )
+                
+                # Only try dynamic for doc pages
+                if '/docs/' in url or '/guide' in url or '/api' in url:
+                    print(f"  Static failed, trying dynamic...")
+                    result = self.dynamic_parser.parse(url)
+                    
+                    if result.success and self._requires_login(result.markdown):
+                        return PageResult(
+                            url=url,
+                            title=title or url,
+                            filename=self._sanitize_filename(title, url),
+                            markdown="",
+                            success=False,
+                            error="Requires login"
+                        )
+                else:
+                    return PageResult(
+                        url=url,
+                        title=title or url,
+                        filename=self._sanitize_filename(title, url),
+                        markdown="",
+                        success=False,
+                        error="Static failed, not a doc page"
+                    )
+            
+            if result.success:
+                page_title = result.title or title or url
+                filename = self._sanitize_filename(page_title, url)
+                print(f"  ✓ Success: {len(result.markdown or '')} chars")
+                return PageResult(
+                    url=url,
+                    title=page_title,
+                    filename=filename,
+                    markdown=result.markdown or "",
+                    success=True
+                )
+            else:
+                print(f"  ✗ Failed: {result.error}")
+                return PageResult(
+                    url=url,
+                    title=title or url,
+                    filename=self._sanitize_filename(title, url),
+                    markdown="",
+                    success=False,
+                    error=result.error
+                )
+                
+        except Exception as e:
+            print(f"  ✗ Exception: {e}")
+            return PageResult(
+                url=url,
+                title=title or url,
+                filename=self._sanitize_filename(title, url),
+                markdown="",
+                success=False,
+                error=str(e)
+            )
+    
     async def crawl_page(self, url: str, title: str = "") -> PageResult:
         """Crawl a single page"""
         try:
@@ -134,24 +227,147 @@ class BatchCrawler:
         )
         yield (final_progress, results)
     
+    def _requires_login(self, markdown: str) -> bool:
+        """
+        Detect if a page requires login by analyzing its content.
+        This is a universal method that works for any website.
+        
+        Strategy:
+        1. If content is very short AND contains login keywords -> requires login
+        2. If content mentions access denied / unauthorized -> requires login
+        3. Otherwise -> accessible
+        """
+        if not markdown:
+            return True
+        
+        content_lower = markdown.lower()
+        content_length = len(markdown)
+        
+        # Login-related keywords (multi-language)
+        login_keywords = [
+            # Chinese
+            '登录', '登入', '请先登录', '需要登录', '请登录后', '登录后查看',
+            '请先登入', '账号登录', '用户登录', '会员登录',
+            # English
+            'login', 'log in', 'sign in', 'signin', 'please log in',
+            'authentication required', 'must be logged in', 'login required',
+            'please sign in', 'sign in to continue'
+        ]
+        
+        # Access denied keywords
+        access_denied_keywords = [
+            # Chinese
+            '权限不足', '无权访问', '访问被拒绝', '需要授权', '没有权限',
+            '禁止访问', '未授权', '请先授权',
+            # English
+            'forbidden', 'access denied', 'unauthorized', 'not authorized',
+            'permission denied', 'access restricted'
+        ]
+        
+        # Check 1: Very little content with login keywords
+        # If page has < 200 chars and mentions login, it's likely a login gate
+        if content_length < 200:
+            if any(kw in content_lower for kw in login_keywords):
+                return True
+            if any(kw in content_lower for kw in access_denied_keywords):
+                return True
+        
+        # Check 2: Short content with heavy login emphasis
+        # If page has < 500 chars and login keywords appear multiple times
+        if content_length < 500:
+            login_count = sum(1 for kw in login_keywords if kw in content_lower)
+            if login_count >= 2:
+                return True
+        
+        # Check 3: Page title/heading mentions login (anywhere in content)
+        # Look for patterns like "# 登录" or "## Sign In"
+        if '# 登录' in markdown or '# login' in content_lower or '# sign in' in content_lower:
+            if content_length < 1000:
+                return True
+        
+        return False
+    
     def crawl_batch_sync(
         self, 
         pages: List[Dict[str, str]], 
         max_pages: int = 50
     ) -> List[PageResult]:
-        """Synchronous batch crawl"""
+        """Synchronous batch crawl with smart login detection"""
         pages = pages[:max_pages]
         results = []
+        total = len(pages)
         
-        for page in pages:
+        print(f"\n=== Starting batch crawl: {total} pages ===")
+        
+        for i, page in enumerate(pages, 1):
             url = page.get('url', '')
             title = page.get('title', '')
             
-            # Crawl synchronously
+            print(f"[{i}/{total}] Crawling: {title[:30]}... ({url[:50]})")
+            
             try:
+                # Try static parser first
                 result = self.static_parser.parse(url)
+                
+                # Check if page requires login
+                if result.success and self._requires_login(result.markdown):
+                    print(f"  ⚠ Detected login required, skipping...")
+                    results.append(PageResult(
+                        url=url,
+                        title=title or url,
+                        filename=self._sanitize_filename(title, url),
+                        markdown="",
+                        success=False,
+                        error="Requires login"
+                    ))
+                    continue
+                
+                # If static failed, check if it's worth trying dynamic
+                # Only try dynamic for doc pages with actual content potential
                 if not result.success:
-                    result = self.dynamic_parser.parse(url)
+                    error_msg = result.error or ""
+                    
+                    # Skip dynamic for pages that are clearly inaccessible
+                    if "too short" in error_msg.lower() or "blocked" in error_msg.lower():
+                        print(f"  ⚠ Static got no content, likely requires login, skipping dynamic...")
+                        results.append(PageResult(
+                            url=url,
+                            title=title or url,
+                            filename=self._sanitize_filename(title, url),
+                            markdown="",
+                            success=False,
+                            error="No accessible content"
+                        ))
+                        continue
+                    
+                    # Only try dynamic for explicit doc pages
+                    if '/docs/' in url or '/guide' in url or '/api' in url:
+                        print(f"  Static failed, trying dynamic...")
+                        result = self.dynamic_parser.parse(url)
+                        
+                        # Check login requirement again
+                        if result.success and self._requires_login(result.markdown):
+                            print(f"  ⚠ Detected login required, skipping...")
+                            results.append(PageResult(
+                                url=url,
+                                title=title or url,
+                                filename=self._sanitize_filename(title, url),
+                                markdown="",
+                                success=False,
+                                error="Requires login"
+                            ))
+                            continue
+                    else:
+                        print(f"  ⚠ Not a doc page, skipping dynamic...")
+                        results.append(PageResult(
+                            url=url,
+                            title=title or url,
+                            filename=self._sanitize_filename(title, url),
+                            markdown="",
+                            success=False,
+                            error="Static failed, not a doc page"
+                        ))
+                        continue
                 
                 if result.success:
                     page_title = result.title or title or url
@@ -163,6 +379,7 @@ class BatchCrawler:
                         markdown=result.markdown or "",
                         success=True
                     ))
+                    print(f"  ✓ Success: {len(result.markdown or '')} chars")
                 else:
                     results.append(PageResult(
                         url=url,
@@ -172,6 +389,8 @@ class BatchCrawler:
                         success=False,
                         error=result.error
                     ))
+                    print(f"  ✗ Failed: {result.error}")
+                    
             except Exception as e:
                 results.append(PageResult(
                     url=url,
@@ -181,6 +400,10 @@ class BatchCrawler:
                     success=False,
                     error=str(e)
                 ))
+                print(f"  ✗ Exception: {e}")
+        
+        success_count = len([r for r in results if r.success])
+        print(f"=== Batch crawl complete: {success_count}/{total} succeeded ===\n")
         
         return results
     

@@ -1,9 +1,11 @@
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, List
 from pathlib import Path
+import json
+import asyncio
 
 from app.parsers import WeChatParser, StaticParser, DynamicParser
 from app.pdf_generator import PDFGenerator
@@ -364,6 +366,77 @@ def crawl_site(request: CrawlSiteRequest):
             status="error",
             error=str(e)
         )
+
+
+@app.post("/api/crawl-site-stream")
+async def crawl_site_stream(request: CrawlSiteRequest):
+    """Crawl multiple pages with SSE progress updates"""
+    
+    async def generate():
+        crawler = BatchCrawler()
+        pages_dict = [{"url": p.url, "title": p.title} for p in request.pages]
+        pages_to_crawl = pages_dict[:request.max_pages]
+        total = len(pages_to_crawl)
+        results = []
+        
+        for i, page in enumerate(pages_to_crawl):
+            url = page.get('url', '')
+            title = page.get('title', '')
+            
+            # Send progress event
+            progress_data = {
+                "type": "progress",
+                "current": i + 1,
+                "total": total,
+                "title": title,
+                "url": url
+            }
+            yield f"data: {json.dumps(progress_data)}\n\n"
+            
+            # Crawl the page (run in thread to not block)
+            result = await asyncio.to_thread(
+                lambda: crawler.crawl_single_page(url, title)
+            )
+            results.append(result)
+            
+            # Send page result
+            page_data = {
+                "type": "page",
+                "url": result.url,
+                "title": result.title,
+                "filename": result.filename,
+                "success": result.success,
+                "error": result.error
+            }
+            yield f"data: {json.dumps(page_data)}\n\n"
+        
+        # Send completion event
+        complete_data = {
+            "type": "complete",
+            "total": total,
+            "success_count": len([r for r in results if r.success]),
+            "pages": [
+                {
+                    "url": r.url,
+                    "title": r.title,
+                    "filename": r.filename,
+                    "success": r.success,
+                    "error": r.error,
+                    "markdown": r.markdown if r.success else ""
+                } for r in results
+            ]
+        }
+        yield f"data: {json.dumps(complete_data)}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 @app.post("/api/download-site")

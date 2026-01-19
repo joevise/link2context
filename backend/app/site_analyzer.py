@@ -6,6 +6,7 @@ from typing import List, Optional
 from dataclasses import dataclass
 from fake_useragent import UserAgent
 import requests
+import json
 
 
 @dataclass
@@ -53,8 +54,8 @@ class SiteAnalyzer:
         self.config = config
         self.prompt = config.prompt or self.DEFAULT_PROMPT
     
-    def _fetch_page(self, url: str) -> Optional[str]:
-        """Fetch page HTML content"""
+    def _fetch_page_static(self, url: str) -> Optional[str]:
+        """Fetch page HTML content using static request"""
         try:
             ua = UserAgent()
             headers = {
@@ -65,7 +66,27 @@ class SiteAnalyzer:
             response.raise_for_status()
             return response.text
         except Exception as e:
-            print(f"Failed to fetch {url}: {e}")
+            print(f"Static fetch failed for {url}: {e}")
+            return None
+    
+    def _fetch_page_dynamic(self, url: str) -> Optional[str]:
+        """Fetch page HTML content using Playwright for dynamic sites"""
+        try:
+            from playwright.sync_api import sync_playwright
+            
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(url, wait_until="networkidle", timeout=30000)
+                
+                # Wait a bit more for any lazy-loaded content
+                page.wait_for_timeout(2000)
+                
+                html = page.content()
+                browser.close()
+                return html
+        except Exception as e:
+            print(f"Dynamic fetch failed for {url}: {e}")
             return None
     
     def _extract_links_basic(self, html: str, base_url: str) -> List[dict]:
@@ -77,12 +98,14 @@ class SiteAnalyzer:
         parsed_base = urlparse(base_url)
         base_domain = parsed_base.netloc
         
-        # Look for common navigation/sidebar elements
+        # Look for common navigation/sidebar elements - expanded selectors
         nav_selectors = [
             'nav', 'aside', '.sidebar', '.nav', '.menu', '.toc',
             '[class*="sidebar"]', '[class*="navigation"]', '[class*="menu"]',
             '[class*="docs"]', '[class*="toc"]', '[id*="sidebar"]',
-            '[id*="nav"]', '[id*="menu"]'
+            '[id*="nav"]', '[id*="menu"]', '[class*="list"]',
+            '[class*="tree"]', '[class*="index"]', '[class*="contents"]',
+            '[class*="drawer"]', '[class*="panel"]', 'ul', 'ol'
         ]
         
         nav_elements = []
@@ -97,6 +120,8 @@ class SiteAnalyzer:
         if not nav_elements:
             nav_elements = [soup]
         
+        print(f"Found {len(nav_elements)} navigation elements")
+        
         for nav in nav_elements:
             for a in nav.find_all('a', href=True):
                 href = a.get('href', '')
@@ -107,12 +132,16 @@ class SiteAnalyzer:
                 
                 # Skip common non-doc links
                 skip_patterns = [
-                    r'^#', r'^javascript:', r'^mailto:', r'^tel:',
+                    r'^#$', r'^javascript:', r'^mailto:', r'^tel:',
                     r'login', r'signin', r'signup', r'register',
-                    r'twitter\.com', r'facebook\.com', r'github\.com',
-                    r'linkedin\.com', r'\.(png|jpg|gif|pdf|zip)$'
+                    r'twitter\.com', r'facebook\.com', r'linkedin\.com',
+                    r'\.(png|jpg|gif|pdf|zip|exe|dmg)$'
                 ]
                 if any(re.search(p, href, re.I) for p in skip_patterns):
+                    continue
+                
+                # Handle anchor links - keep if they're different pages
+                if href.startswith('#'):
                     continue
                 
                 # Convert to absolute URL
@@ -123,18 +152,21 @@ class SiteAnalyzer:
                 if parsed_url.netloc != base_domain:
                     continue
                 
-                # Normalize URL
+                # Normalize URL (remove trailing slash and fragment)
                 normalized_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
                 if normalized_url.endswith('/'):
                     normalized_url = normalized_url[:-1]
                 
-                if normalized_url not in seen_urls and normalized_url != base_url.rstrip('/'):
+                base_normalized = base_url.rstrip('/')
+                
+                if normalized_url not in seen_urls and normalized_url != base_normalized:
                     seen_urls.add(normalized_url)
                     links.append({
                         "url": normalized_url,
                         "title": title[:100]  # Limit title length
                     })
         
+        print(f"Basic extraction found {len(links)} unique links")
         return links
     
     async def analyze_with_ai(self, html: str, base_url: str) -> List[dict]:
@@ -143,18 +175,33 @@ class SiteAnalyzer:
         basic_links = self._extract_links_basic(html, base_url)
         
         if not self.config.api_key:
+            print("No API key configured, using basic extraction only")
             return basic_links
         
         try:
+            print(f"Calling AI ({self.config.provider}/{self.config.model}) for analysis...")
+            
             # Prepare HTML summary (limit size for AI)
             soup = BeautifulSoup(html, 'lxml')
             
             # Remove scripts, styles
-            for tag in soup.find_all(['script', 'style', 'noscript']):
+            for tag in soup.find_all(['script', 'style', 'noscript', 'svg', 'path']):
                 tag.decompose()
             
-            # Get text content with structure hints
-            html_summary = str(soup)[:15000]  # Limit to ~15k chars
+            # Get text content with structure hints - focus on nav elements
+            nav_html = ""
+            for selector in ['nav', 'aside', '[class*="sidebar"]', '[class*="menu"]', '[class*="nav"]']:
+                try:
+                    for el in soup.select(selector):
+                        nav_html += str(el)
+                except:
+                    pass
+            
+            # If we found nav elements, use them; otherwise use limited page content
+            if len(nav_html) > 500:
+                html_summary = nav_html[:20000]
+            else:
+                html_summary = str(soup)[:20000]
             
             prompt = f"""{self.prompt}
 
@@ -169,26 +216,33 @@ HTML内容:
             else:
                 result = await self._call_openai(prompt)
             
+            print(f"AI response received, parsing...")
+            
             # Parse AI response
-            import json
             # Try to extract JSON from response
             json_match = re.search(r'\{[\s\S]*\}', result)
             if json_match:
                 data = json.loads(json_match.group())
                 ai_pages = data.get('pages', [])
                 
+                print(f"AI found {len(ai_pages)} pages")
+                
                 # Convert relative URLs to absolute
-                parsed_base = urlparse(base_url)
                 for page in ai_pages:
                     if not page['url'].startswith('http'):
                         page['url'] = urljoin(base_url, page['url'])
                 
-                return ai_pages
+                # Merge AI results with basic links (prefer AI results)
+                if len(ai_pages) > 0:
+                    return ai_pages
             
+            print("AI parsing failed or returned empty, using basic extraction")
             return basic_links
             
         except Exception as e:
             print(f"AI analysis failed: {e}")
+            import traceback
+            traceback.print_exc()
             return basic_links
     
     async def _call_openai(self, prompt: str) -> str:
@@ -207,7 +261,9 @@ HTML内容:
             "temperature": 0.1
         }
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        print(f"Calling OpenAI API: {url}")
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
@@ -229,28 +285,62 @@ HTML内容:
             "messages": [{"role": "user", "content": prompt}]
         }
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        print(f"Calling Claude API: {url}")
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
             return data['content'][0]['text']
     
     async def analyze(self, url: str) -> SiteStructure:
-        """Analyze a website and return its documentation structure"""
-        html = self._fetch_page(url)
+        """Analyze a website and return its documentation structure.
+        Uses direct link extraction without AI - simpler and faster.
+        """
+        print(f"\n=== Analyzing site: {url} ===")
+        
+        # First try static fetch
+        html = self._fetch_page_static(url)
+        
+        # Check if page seems to be dynamic (minimal content)
+        if html:
+            soup = BeautifulSoup(html, 'lxml')
+            text_content = soup.get_text(strip=True)
+            link_count = len(soup.find_all('a', href=True))
+            print(f"Static fetch: {len(html)} chars, {link_count} links, {len(text_content)} text chars")
+            
+            # If very little content, try dynamic fetch
+            if len(text_content) < 500 or link_count < 5:
+                print("Page appears to be dynamically rendered, trying Playwright...")
+                dynamic_html = self._fetch_page_dynamic(url)
+                if dynamic_html:
+                    dyn_soup = BeautifulSoup(dynamic_html, 'lxml')
+                    dyn_link_count = len(dyn_soup.find_all('a', href=True))
+                    print(f"Dynamic fetch: {len(dynamic_html)} chars, {dyn_link_count} links")
+                    if dyn_link_count > link_count:
+                        html = dynamic_html
+        else:
+            # Static failed, try dynamic
+            print("Static fetch failed, trying Playwright...")
+            html = self._fetch_page_dynamic(url)
+        
         if not html:
             return SiteStructure(
                 success=False,
                 base_url=url,
-                error="Failed to fetch page"
+                error="Failed to fetch page (both static and dynamic methods failed)"
             )
         
-        pages = await self.analyze_with_ai(html, url)
+        # Direct link extraction - no AI needed, user can select which ones to crawl
+        pages = self._extract_links_basic(html, url)
+        print(f"Direct extraction found {len(pages)} links")
         
         # Add the original URL as first page if not already included
         original_normalized = url.rstrip('/')
         if not any(p['url'].rstrip('/') == original_normalized for p in pages):
             pages.insert(0, {"url": url, "title": "首页"})
+        
+        print(f"=== Analysis complete: {len(pages)} pages found ===\n")
         
         return SiteStructure(
             success=True,

@@ -16,6 +16,8 @@ class DynamicParser(BaseParser):
     def parse(self, url: str) -> ParseResult:
         try:
             from playwright.sync_api import sync_playwright
+            
+            print(f"    [Dynamic] Starting Playwright for: {url[:60]}...")
 
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
@@ -24,14 +26,22 @@ class DynamicParser(BaseParser):
                 )
                 page = context.new_page()
 
-                # Navigate and wait for network idle
-                page.goto(url, wait_until="networkidle", timeout=60000)
+                # Navigate with shorter timeout (15 seconds)
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    # Wait a bit for dynamic content
+                    page.wait_for_timeout(2000)
+                except Exception as nav_error:
+                    print(f"    [Dynamic] Navigation timeout: {nav_error}")
+                    browser.close()
+                    return ParseResult(success=False, error=f"Navigation timeout")
 
                 # Get page title
                 title = page.title() or "Untitled"
 
                 # Get page content
                 html_content = page.content()
+                print(f"    [Dynamic] Got content: {len(html_content)} chars")
 
                 browser.close()
 
