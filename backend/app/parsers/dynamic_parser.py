@@ -29,8 +29,12 @@ class DynamicParser(BaseParser):
                 # Navigate with shorter timeout (15 seconds)
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=15000)
-                    # Wait a bit for dynamic content
-                    page.wait_for_timeout(2000)
+                    # Wait for SPA frameworks to render content
+                    try:
+                        page.wait_for_selector('article, main, [role="main"], .content, .markdown, .docs-content, .vp-doc', timeout=5000)
+                    except:
+                        pass
+                    page.wait_for_timeout(3000)
                 except Exception as nav_error:
                     print(f"    [Dynamic] Navigation timeout: {nav_error}")
                     browser.close()
@@ -110,15 +114,18 @@ class DynamicParser(BaseParser):
             return ParseResult(success=False, error=f"Dynamic parse error: {str(e)}")
 
     def _extract_main_content(self, soup):
-        """Heuristic detection of article body"""
+        """Heuristic detection of article body — SPA/docs site aware"""
+        import re as _re
         selectors = [
+            # Documentation frameworks (VitePress, Docusaurus, GitBook, Nextra, etc.)
+            ('div', {'class_': _re.compile(r'vp-doc|docs-content|markdown-body|prose|nextra')}),
+            ('div', {'class_': _re.compile(r'theme-default-content|page-content')}),
+            # Standard semantic HTML
             ('article', {}),
             ('main', {}),
-            ('div', {'class_': 'content'}),
-            ('div', {'class_': 'article'}),
-            ('div', {'class_': 'post'}),
-            ('div', {'id': 'content'}),
-            ('div', {'id': 'main'}),
+            # Common class/id patterns
+            ('div', {'class_': _re.compile(r'^content$|^article$|^post$|^entry')}),
+            ('div', {'id': _re.compile(r'^content$|^main$|^article$')}),
             ('div', {'role': 'main'}),
         ]
 
@@ -127,4 +134,15 @@ class DynamicParser(BaseParser):
             if content and len(content.get_text(strip=True)) > 100:
                 return content
 
-        return None
+        # Last resort: find the div with the most text content
+        best = None
+        best_len = 0
+        for div in soup.find_all('div'):
+            text = div.get_text(strip=True)
+            if len(text) > best_len and len(text) > 200:
+                children_divs = div.find_all('div', recursive=False)
+                if len(children_divs) < 20:
+                    best = div
+                    best_len = len(text)
+        
+        return best

@@ -77,10 +77,14 @@ class SiteAnalyzer:
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
-                page.goto(url, wait_until="networkidle", timeout=30000)
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 
-                # Wait a bit more for any lazy-loaded content
-                page.wait_for_timeout(2000)
+                # Wait for SPA frameworks to render
+                try:
+                    page.wait_for_selector('nav, aside, .sidebar, [class*="sidebar"], [class*="menu"]', timeout=5000)
+                except:
+                    pass
+                page.wait_for_timeout(3000)
                 
                 html = page.content()
                 browser.close()

@@ -70,7 +70,7 @@ class BatchCrawler:
                     error="Requires login"
                 )
             
-            # If static failed, check if it's worth trying dynamic
+            # If static failed, try dynamic parser
             if not result.success:
                 error_msg = result.error or ""
                 
@@ -86,28 +86,18 @@ class BatchCrawler:
                         error="No accessible content"
                     )
                 
-                # Only try dynamic for doc pages
-                if '/docs/' in url or '/guide' in url or '/api' in url:
-                    print(f"  Static failed, trying dynamic...")
-                    result = self.dynamic_parser.parse(url)
-                    
-                    if result.success and self._requires_login(result.markdown):
-                        return PageResult(
-                            url=url,
-                            title=title or url,
-                            filename=self._sanitize_filename(title, url),
-                            markdown="",
-                            success=False,
-                            error="Requires login"
-                        )
-                else:
+                # Always try dynamic for any page (SPA/Next.js sites need it)
+                print(f"  Static failed, trying dynamic...")
+                result = self.dynamic_parser.parse(url)
+                
+                if result.success and self._requires_login(result.markdown):
                     return PageResult(
                         url=url,
                         title=title or url,
                         filename=self._sanitize_filename(title, url),
                         markdown="",
                         success=False,
-                        error="Static failed, not a doc page"
+                        error="Requires login"
                     )
             
             if result.success:
@@ -322,8 +312,7 @@ class BatchCrawler:
                     ))
                     continue
                 
-                # If static failed, check if it's worth trying dynamic
-                # Only try dynamic for doc pages with actual content potential
+                # If static failed, try dynamic parser
                 if not result.success:
                     error_msg = result.error or ""
                     
@@ -340,32 +329,20 @@ class BatchCrawler:
                         ))
                         continue
                     
-                    # Only try dynamic for explicit doc pages
-                    if '/docs/' in url or '/guide' in url or '/api' in url:
-                        print(f"  Static failed, trying dynamic...")
-                        result = self.dynamic_parser.parse(url)
-                        
-                        # Check login requirement again
-                        if result.success and self._requires_login(result.markdown):
-                            print(f"  ⚠ Detected login required, skipping...")
-                            results.append(PageResult(
-                                url=url,
-                                title=title or url,
-                                filename=self._sanitize_filename(title, url),
-                                markdown="",
-                                success=False,
-                                error="Requires login"
-                            ))
-                            continue
-                    else:
-                        print(f"  ⚠ Not a doc page, skipping dynamic...")
+                    # Always try dynamic for any page (SPA/Next.js sites need it)
+                    print(f"  Static failed, trying dynamic...")
+                    result = self.dynamic_parser.parse(url)
+                    
+                    # Check login requirement again
+                    if result.success and self._requires_login(result.markdown):
+                        print(f"  ⚠ Detected login required, skipping...")
                         results.append(PageResult(
                             url=url,
                             title=title or url,
                             filename=self._sanitize_filename(title, url),
                             markdown="",
                             success=False,
-                            error="Static failed, not a doc page"
+                            error="Requires login"
                         ))
                         continue
                 
