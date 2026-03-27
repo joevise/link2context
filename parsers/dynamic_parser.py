@@ -22,8 +22,23 @@ class DynamicParser(BaseParser):
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
                 page = browser.new_page()
-                page.goto(url, timeout=60000, wait_until='load')
-                page.wait_for_timeout(3000)  # Extra wait for JS to settle
+                
+                # For SPA/Next.js sites: use domcontentloaded + wait for JS rendering
+                # 'load' hangs on sites with streaming/SSE connections
+                try:
+                    page.goto(url, timeout=30000, wait_until='domcontentloaded')
+                except Exception:
+                    # Fallback: some sites need even longer
+                    page.goto(url, timeout=60000, wait_until='commit')
+                
+                # Wait for JS frameworks to render content
+                # Try to wait for common SPA content selectors
+                try:
+                    page.wait_for_selector('article, main, [role="main"], .content, #content, .markdown, .docs-content', timeout=8000)
+                except Exception:
+                    pass  # Selector not found, just wait fixed time
+                
+                page.wait_for_timeout(3000)  # Extra buffer for lazy-loaded content
 
                 # Get page title
                 title = page.title() or "Untitled"
@@ -99,21 +114,40 @@ class DynamicParser(BaseParser):
             return ParseResult(success=False, error=f"Dynamic parse error: {str(e)}")
 
     def _extract_main_content(self, soup):
-        """Heuristic detection of article body"""
+        """Heuristic detection of article body — SPA/docs site aware"""
         selectors = [
+            # Documentation frameworks (VitePress, Docusaurus, GitBook, Nextra, etc.)
+            ('div', {'class_': re.compile(r'vp-doc|docs-content|markdown-body|prose|nextra')}),
+            ('div', {'class_': re.compile(r'theme-default-content|page-content')}),
+            # Standard semantic HTML
             ('article', {}),
             ('main', {}),
-            ('div', {'class_': 'content'}),
-            ('div', {'class_': 'article'}),
-            ('div', {'class_': 'post'}),
-            ('div', {'id': 'content'}),
-            ('div', {'id': 'main'}),
+            ('[role=main]', {}),
+            # Common class patterns
+            ('div', {'class_': re.compile(r'^content$|^article$|^post$|^entry')}),
+            ('div', {'id': re.compile(r'^content$|^main$|^article$')}),
             ('div', {'role': 'main'}),
         ]
 
-        for tag, attrs in selectors:
-            content = soup.find(tag, **attrs)
+        for selector_or_tag, attrs in selectors:
+            # Handle CSS-style selectors
+            if selector_or_tag.startswith('['):
+                content = soup.select_one(selector_or_tag)
+            else:
+                content = soup.find(selector_or_tag, **attrs) if attrs else soup.find(selector_or_tag)
             if content and len(content.get_text(strip=True)) > 100:
                 return content
 
-        return None
+        # Last resort: find the div with the most text content
+        best = None
+        best_len = 0
+        for div in soup.find_all('div'):
+            text = div.get_text(strip=True)
+            if len(text) > best_len and len(text) > 200:
+                # Avoid full-page wrappers (check depth)
+                children_divs = div.find_all('div', recursive=False)
+                if len(children_divs) < 20:  # Not a top-level wrapper
+                    best = div
+                    best_len = len(text)
+        
+        return best
