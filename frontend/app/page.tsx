@@ -149,7 +149,7 @@ export default function Home() {
     setDiscoveredPages([])
     setSelectedPages(new Set())
     setCrawledPages([])
-    setCrawlProgress({ current: 0, total: 0, status: 'analyzing' })
+    setCrawlProgress({ current: 0, total: 0, status: 'analyzing', currentTitle: '' })
 
     try {
       const response = await fetch(`${API_URL}/api/analyze-site`, {
@@ -166,7 +166,7 @@ export default function Home() {
         setDiscoveredPages(data.pages)
         setSelectedPages(new Set(data.pages.map((p: PageInfo) => p.url)))
         setShowPageList(true)
-        setCrawlProgress({ current: 0, total: data.pages.length, status: 'discovered' })
+        setCrawlProgress({ current: 0, total: data.pages.length, status: 'discovered', currentTitle: '' })
       } else {
         alert(data.error || '未发现文档页面')
       }
