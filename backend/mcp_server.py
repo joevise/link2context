@@ -65,7 +65,6 @@ async def list_tools():
 async def call_tool(name: str, arguments: dict[str, Any]):
     try:
         import httpx
-        ssl_cert = os.environ.get("REQUESTS_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
         
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
             if name == "convert_page":
@@ -74,7 +73,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                     f"{BACKEND_URL}/api/convert",
                     json={"url": url},
                     headers={"Content-Type": "application/json"},
-                    verify=ssl_cert,
+                    
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -93,7 +92,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                     f"{BACKEND_URL}/api/analyze-site",
                     json={"url": url},
                     headers={"Content-Type": "application/json"},
-                    verify=ssl_cert,
+                    
                 )
                 analyze_resp.raise_for_status()
                 pages = analyze_resp.json().get("pages", [])[:max_pages]
@@ -108,7 +107,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                             f"{BACKEND_URL}/api/convert",
                             json={"url": page_url},
                             headers={"Content-Type": "application/json"},
-                            verify=ssl_cert,
+                            
                         )
                         conv_resp.raise_for_status()
                         d = conv_resp.json()
@@ -131,7 +130,7 @@ async def call_tool(name: str, arguments: dict[str, Any]):
                     f"{BACKEND_URL}/api/ocr",
                     json={"image_url": image_url, "language": language},
                     headers={"Content-Type": "application/json"},
-                    verify=ssl_cert,
+                    
                 )
                 resp.raise_for_status()
                 data = resp.json()
