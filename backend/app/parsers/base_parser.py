@@ -1,4 +1,3 @@
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List
@@ -38,15 +37,14 @@ class BaseParser(ABC):
             'iframe', 'noscript', 'form', 'button', 'input',
             'select', 'textarea', 'meta', 'link'
         ]
-        # Use word boundary matching for classes/ids
         noise_classes = [
-            r'ad', r'ads?', r'advertisement', r'banner', r'sidebar',
-            r'comment', r'comments', r'share', r'social', r'related',
-            r'recommend', r'footer', r'header', r'navigation'
+            'ad', 'ads', 'advertisement', 'banner', 'sidebar',
+            'comment', 'comments', 'share', 'social', 'related',
+            'recommend', 'footer', 'header', 'nav', 'navigation'
         ]
         noise_ids = [
-            r'ad', r'ads?', r'sidebar', r'comment', r'comments',
-            r'footer', r'header', r'navigation'
+            'ad', 'ads', 'sidebar', 'comment', 'comments',
+            'footer', 'header', 'nav', 'navigation'
         ]
 
         # Remove noise tags (except iframe for video detection)
@@ -55,27 +53,14 @@ class BaseParser(ABC):
                 for element in soup.find_all(tag):
                     element.decompose()
 
-        # Remove elements with noise classes (word boundary match)
-        for element in soup.find_all(class_=True):
-            classes = element.get('class', [])
-            if not classes:
-                continue
-            if isinstance(classes, str):
-                classes = classes.split()
-            classes_str = ' '.join(classes)
-            for pattern in noise_classes:
-                if re.search(pattern, classes_str, re.I):
-                    element.decompose()
-                    break
+        # Remove elements with noise classes
+        for class_name in noise_classes:
+            for element in soup.find_all(class_=lambda x: x and class_name in str(x).lower()):
+                element.decompose()
 
-        # Remove elements with noise ids (word boundary match)
-        for element in soup.find_all(id_=True):
-            id_val = element.get('id', '')
-            if not id_val:
-                continue
-            for pattern in noise_ids:
-                if re.search(pattern, id_val, re.I):
-                    element.decompose()
-                    break
+        # Remove elements with noise ids
+        for id_name in noise_ids:
+            for element in soup.find_all(id=lambda x: x and id_name in str(x).lower()):
+                element.decompose()
 
         return soup

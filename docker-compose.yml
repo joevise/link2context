@@ -1,0 +1,41 @@
+services:
+  link2context-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: link2context-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - image_cache:/app/app/cache/images
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  link2context-web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://67.209.190.54:8000
+    container_name: link2context-web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://67.209.190.54:8000
+    depends_on:
+      - link2context-api
+    restart: unless-stopped
+
+volumes:
+  image_cache:

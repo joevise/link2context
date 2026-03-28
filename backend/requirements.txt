@@ -1,0 +1,13 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+requests==2.31.0
+httpx==0.26.0
+beautifulsoup4==4.12.3
+markdownify==0.12.1
+fake-useragent==1.4.0
+playwright==1.41.0
+lxml==5.1.0
+python-multipart==0.0.6
+markdown==3.5.2
+reportlab==4.0.9
+Pillow==10.2.0

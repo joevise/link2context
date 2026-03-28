@@ -2,7 +2,6 @@ import os
 import re
 import hashlib
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin, urlparse
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
@@ -45,10 +44,8 @@ class MediaHandler:
         """Generate a unique hash for image URL"""
         return hashlib.md5(url.encode()).hexdigest()
     
-    def download_image(self, url: str, headers: dict = None, timeout: float = 8.0) -> Optional[str]:
-        """Download image and save to cache, return local filename.
-        Uses short timeout to avoid blocking on unreachable resources.
-        """
+    def download_image(self, url: str, headers: dict = None) -> Optional[str]:
+        """Download image and save to cache, return local filename"""
         if not url or url.startswith('data:'):
             return None
             
@@ -68,7 +65,7 @@ class MediaHandler:
             if headers:
                 default_headers.update(headers)
             
-            response = requests.get(url, headers=default_headers, timeout=timeout, stream=True)
+            response = requests.get(url, headers=default_headers, timeout=30, stream=True)
             response.raise_for_status()
             
             # Determine file extension
@@ -89,7 +86,7 @@ class MediaHandler:
             return filename
             
         except Exception as e:
-            print(f"Warning: Failed to download image {url}: {e}")
+            print(f"Failed to download image {url}: {e}")
             return None
     
     def _get_extension(self, url: str, content_type: str) -> str:
@@ -188,37 +185,22 @@ class MediaHandler:
         return None
     
     def process_images_in_soup(self, soup, headers: dict = None) -> Tuple[any, Dict[str, str]]:
-        """Process all images in BeautifulSoup object, download and replace URLs.
-        Uses thread pool to download images concurrently with short timeout.
-        """
+        """Process all images in BeautifulSoup object, download and replace URLs"""
         image_map = {}  # original_url -> local_filename
         
-        # Collect all images first
-        images_to_download = []
         for img in soup.find_all('img'):
+            # Get image source (handle lazy loading)
             src = img.get('data-src') or img.get('data-original') or img.get('src')
             if not src:
                 continue
-            images_to_download.append((img, src))
-        
-        # Download concurrently with thread pool
-        def download_one(img, src):
+            
+            # Download image
             local_filename = self.download_image(src, headers)
-            return img, src, local_filename
-        
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(download_one, img, src): (img, src) 
-                      for img, src in images_to_download}
-            for future in as_completed(futures, timeout=30):
-                try:
-                    img, src, local_filename = future.result()
-                    if local_filename:
-                        image_map[src] = local_filename
-                        img['src'] = f"/api/images/{local_filename}"
-                        img['data-original-src'] = src
-                except Exception as e:
-                    img, src, _ = futures[future]
-                    print(f"Warning: Image download failed for {src}: {e}")
+            if local_filename:
+                image_map[src] = local_filename
+                # Update img src to local path
+                img['src'] = f"/api/images/{local_filename}"
+                img['data-original-src'] = src
         
         return soup, image_map
     
