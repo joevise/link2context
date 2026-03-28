@@ -1,82 +1,101 @@
 import re
+import json
+import subprocess
+import sys
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 
 from .base_parser import BaseParser, ParseResult, MediaInfo
 from ..media_handler import MediaHandler
 
+# Standalone script for Playwright extraction (runs in subprocess)
+_PW_SCRIPT = '''
+import sys, json
+from playwright.sync_api import sync_playwright
+
+url = sys.argv[1]
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
+    context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    page = context.new_page()
+    
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        try:
+            page.wait_for_selector(
+                "article, main, [role=main], .content, .markdown, .docs-content, .vp-doc, #__next, #__nuxt, #app",
+                timeout=5000
+            )
+        except:
+            pass
+        page.wait_for_timeout(3000)
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
+        browser.close()
+        sys.exit(0)
+    
+    title = page.title() or "Untitled"
+    
+    rendered = page.evaluate("""() => {
+        const sels = [
+            "article", "main", "[role=main]",
+            ".vp-doc", ".docs-content", ".markdown-body", ".prose",
+            ".theme-default-content", ".page-content", ".nextra-content",
+            "#__next main", "#__nuxt main", "#app main",
+            ".content", ".article", ".post-content", ".entry-content"
+        ];
+        for (const s of sels) {
+            const el = document.querySelector(s);
+            if (el && el.innerText.trim().length > 100) return el.outerHTML;
+        }
+        const body = document.body.cloneNode(true);
+        body.querySelectorAll("script,style,noscript,iframe,svg").forEach(e => e.remove());
+        body.querySelectorAll("nav,header,footer,aside").forEach(e => e.remove());
+        return body.innerHTML;
+    }""")
+    
+    full_html = page.content()
+    browser.close()
+    
+    print(json.dumps({"title": title, "rendered": rendered, "full_html_len": len(full_html)}))
+'''
+
 
 class DynamicParser(BaseParser):
-    """Dynamic fallback using headless browser (Playwright)"""
+    """Dynamic fallback using headless browser (Playwright) in a subprocess"""
 
     def can_handle(self, url: str) -> bool:
         return True
 
     def parse(self, url: str) -> ParseResult:
         try:
-            from playwright.sync_api import sync_playwright
+            print(f"    [Dynamic] Starting Playwright subprocess for: {url[:60]}...")
 
-            print(f"    [Dynamic] Starting Playwright for: {url[:60]}...")
+            # Run Playwright in a subprocess to avoid event loop conflicts
+            result = subprocess.run(
+                [sys.executable, "-c", _PW_SCRIPT, url],
+                capture_output=True, text=True, timeout=50,
+                env={"PATH": "/usr/local/bin:/usr/bin:/bin",
+                     "HOME": "/root",
+                     "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
+                     "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt"}
+            )
 
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-                )
-                context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                )
-                page = context.new_page()
+            if result.returncode != 0:
+                err = result.stderr.strip()[-200:]
+                print(f"    [Dynamic] Subprocess failed: {err}")
+                return ParseResult(success=False, error=f"Playwright subprocess error: {err}")
 
-                try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                    # Wait for SPA content to render
-                    try:
-                        page.wait_for_selector(
-                            'article, main, [role="main"], .content, .markdown, '
-                            '.docs-content, .vp-doc, #__next, #__nuxt, #app',
-                            timeout=5000
-                        )
-                    except:
-                        pass
-                    page.wait_for_timeout(3000)
-                except Exception as nav_error:
-                    print(f"    [Dynamic] Navigation error: {nav_error}")
-                    browser.close()
-                    return ParseResult(success=False, error=f"Navigation failed: {str(nav_error)}")
+            data = json.loads(result.stdout.strip())
 
-                title = page.title() or "Untitled"
+            if "error" in data:
+                print(f"    [Dynamic] Navigation error: {data['error']}")
+                return ParseResult(success=False, error=data["error"])
 
-                # Extract rendered DOM content via JS (not page.content())
-                # This gets the actual rendered HTML after SPA hydration
-                rendered_html = page.evaluate("""() => {
-                    // Try to find main content container
-                    const selectors = [
-                        'article', 'main', '[role="main"]',
-                        '.vp-doc', '.docs-content', '.markdown-body', '.prose',
-                        '.theme-default-content', '.page-content', '.nextra-content',
-                        '#__next main', '#__nuxt main', '#app main',
-                        '.content', '.article', '.post-content', '.entry-content'
-                    ];
-                    for (const sel of selectors) {
-                        const el = document.querySelector(sel);
-                        if (el && el.innerText.trim().length > 100) {
-                            return el.outerHTML;
-                        }
-                    }
-                    // Fallback: get body but strip scripts
-                    const body = document.body.cloneNode(true);
-                    body.querySelectorAll('script, style, noscript, iframe, svg').forEach(el => el.remove());
-                    body.querySelectorAll('nav, header, footer, aside').forEach(el => el.remove());
-                    return body.innerHTML;
-                }""")
+            title = data["title"]
+            rendered_html = data["rendered"]
 
-                # Also get full page HTML for video/image detection
-                full_html = page.content()
-
-                print(f"    [Dynamic] Rendered content: {len(rendered_html)} chars")
-
-                browser.close()
+            print(f"    [Dynamic] Rendered content: {len(rendered_html)} chars")
 
             if not rendered_html or len(rendered_html.strip()) < 50:
                 return ParseResult(success=False, error="No rendered content found")
@@ -84,16 +103,9 @@ class DynamicParser(BaseParser):
             # Initialize media handler
             media_handler = MediaHandler(base_url=url)
 
-            # Detect videos from full HTML
-            videos = media_handler.detect_videos(full_html, None)
-
             # Parse the rendered content
             soup = BeautifulSoup(rendered_html, 'lxml')
-
-            # Clean the DOM
             soup = self.clean_html(soup)
-
-            # Find the root content element
             content = soup.find('body') or soup
 
             # Download and cache images
@@ -102,8 +114,6 @@ class DynamicParser(BaseParser):
 
             # Convert to markdown
             markdown_content = md(str(content), heading_style="ATX")
-
-            # Clean up
             markdown_content = re.sub(r'\n{3,}', '\n\n', markdown_content)
             markdown_content = markdown_content.strip()
 
@@ -111,21 +121,11 @@ class DynamicParser(BaseParser):
                 return ParseResult(success=False, error="Content extraction too short")
 
             full_markdown = f"# {title}\n\n{markdown_content}"
-
-            # Create version with local images
             markdown_with_local = media_handler.get_markdown_with_local_images(full_markdown, image_map)
-
-            # Add videos
-            markdown_with_local = media_handler.add_videos_to_markdown(markdown_with_local, videos)
-            full_markdown = media_handler.add_videos_to_markdown(full_markdown, videos)
 
             media_info = MediaInfo(
                 images=image_map,
-                videos=[{
-                    'url': v.original_url,
-                    'thumbnail': v.thumbnail_url,
-                    'local_thumbnail': v.local_path
-                } for v in videos]
+                videos=[]
             )
 
             return ParseResult(
@@ -136,13 +136,16 @@ class DynamicParser(BaseParser):
                 media=media_info
             )
 
+        except subprocess.TimeoutExpired:
+            print(f"    [Dynamic] Subprocess timeout (50s)")
+            return ParseResult(success=False, error="Playwright timed out")
         except Exception as e:
             import traceback
             traceback.print_exc()
             return ParseResult(success=False, error=f"Dynamic parse error: {str(e)}")
 
     def _extract_main_content(self, soup):
-        """Heuristic detection of article body — SPA/docs site aware"""
+        """Heuristic detection of article body"""
         import re as _re
         selectors = [
             ('div', {'class_': _re.compile(r'vp-doc|docs-content|markdown-body|prose|nextra')}),
