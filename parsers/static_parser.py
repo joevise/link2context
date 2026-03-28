@@ -5,7 +5,7 @@ from markdownify import markdownify as md
 from fake_useragent import UserAgent
 
 from .base_parser import BaseParser, ParseResult, MediaInfo
-from media_handler import MediaHandler
+from ..media_handler import MediaHandler
 
 
 class StaticParser(BaseParser):
