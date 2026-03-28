@@ -566,7 +566,6 @@ async def run_server(host: str = "0.0.0.0", port: int = 8001):
 
     app = Starlette(
         routes=[Route("/", streamable_http_handler, methods=["POST"])],
-        log_level="info",
     )
 
     logger.info(f"Starting link2context MCP server on {host}:{port}")
