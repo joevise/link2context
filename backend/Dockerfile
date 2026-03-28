@@ -2,6 +2,10 @@ FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
+# Use system CA certificates for Python requests
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
 # Install system dependencies for Playwright/Chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget curl ca-certificates \
