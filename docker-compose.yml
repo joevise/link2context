@@ -22,6 +22,26 @@ services:
         limits:
           memory: 2G
 
+  link2context-mcp:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.mcp
+    container_name: link2context-mcp
+    ports:
+      - "8001:8001"
+    volumes:
+      - image_cache:/app/app/cache/images
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
+      - MCP_PORT=8001
+      - BACKEND_URL=http://link2context-api:8000
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+      - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+    restart: unless-stopped
+    depends_on:
+      - link2context-api
+
   link2context-web:
     build:
       context: ./frontend
