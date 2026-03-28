@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>link2context</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e5e5e5;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+        h1 span { color: #3b82f6; }
+        .subtitle {
+            color: #737373;
+            font-size: 14px;
+            margin-bottom: 32px;
+        }
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 16px;
+            background: #171717;
+            border: 1px solid #262626;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        input[type="text"]:focus {
+            border-color: #3b82f6;
+        }
+        input[type="text"]::placeholder {
+            color: #525252;
+        }
+        button {
+            padding: 12px 24px;
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        button:hover { background: #2563eb; }
+        button:disabled {
+            background: #1e3a5f;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+        .options {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 24px;
+            align-items: center;
+        }
+        .options label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #a3a3a3;
+            cursor: pointer;
+        }
+        .options input[type="checkbox"] {
+            accent-color: #3b82f6;
+        }
+        .status {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            display: none;
+        }
+        .status.loading {
+            display: block;
+            background: #172554;
+            border: 1px solid #1e3a5f;
+            color: #60a5fa;
+        }
+        .status.error {
+            display: block;
+            background: #450a0a;
+            border: 1px solid #7f1d1d;
+            color: #fca5a5;
+        }
+        .status.success {
+            display: block;
+            background: #052e16;
+            border: 1px solid #14532d;
+            color: #86efac;
+        }
+        .result {
+            display: none;
+        }
+        .result.show { display: block; }
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .result-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+        }
+        .result-meta {
+            font-size: 12px;
+            color: #737373;
+        }
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 0;
+            border-bottom: 1px solid #262626;
+        }
+        .tab {
+            padding: 8px 16px;
+            font-size: 13px;
+            color: #737373;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            background: none;
+            border-radius: 0;
+        }
+        .tab:hover { color: #a3a3a3; }
+        .tab.active {
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+        }
+        .tab-content {
+            display: none;
+            background: #171717;
+            border: 1px solid #262626;
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+            overflow: hidden;
+        }
+        .tab-content.active { display: block; }
+        .markdown-source {
+            padding: 16px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #d4d4d4;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .markdown-rendered {
+            padding: 24px;
+            line-height: 1.7;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .markdown-rendered h1 { font-size: 24px; margin: 16px 0 8px; color: #fff; }
+        .markdown-rendered h2 { font-size: 20px; margin: 14px 0 6px; color: #f5f5f5; }
+        .markdown-rendered h3 { font-size: 17px; margin: 12px 0 4px; color: #e5e5e5; }
+        .markdown-rendered p { margin: 8px 0; color: #d4d4d4; }
+        .markdown-rendered img {
+            max-width: 100%;
+            border-radius: 6px;
+            margin: 8px 0;
+        }
+        .markdown-rendered a { color: #60a5fa; }
+        .markdown-rendered blockquote {
+            border-left: 3px solid #3b82f6;
+            padding-left: 16px;
+            margin: 8px 0;
+            color: #a3a3a3;
+        }
+        .markdown-rendered code {
+            background: #262626;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .markdown-rendered pre {
+            background: #0a0a0a;
+            padding: 16px;
+            border-radius: 6px;
+            overflow-x: auto;
+        }
+        .markdown-rendered pre code {
+            background: none;
+            padding: 0;
+        }
+        .copy-btn {
+            padding: 6px 12px;
+            font-size: 12px;
+            background: #262626;
+            border: 1px solid #404040;
+            color: #a3a3a3;
+        }
+        .copy-btn:hover { background: #333; color: #fff; }
+        .images-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 8px;
+            padding: 16px;
+        }
+        .images-grid img {
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: cover;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .images-grid img:hover { transform: scale(1.05); }
+        .spinner {
+            display: inline-block;
+            width: 14px; height: 14px;
+            border: 2px solid #60a5fa;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (max-width: 640px) {
+            .input-group { flex-direction: column; }
+            button { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>link<span>2</span>context</h1>
+        <p class="subtitle">粘贴任意 URL，提取干净的 Markdown 文本 + 图片</p>
+
+        <div class="input-group">
+            <input type="text" id="urlInput" placeholder="https://mp.weixin.qq.com/s/..." autofocus>
+            <button id="parseBtn" onclick="parseURL()">提取</button>
+        </div>
+        <div class="options">
+            <label>
+                <input type="checkbox" id="dynamicMode">
+                动态渲染（JS 重度页面）
+            </label>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div id="result" class="result">
+            <div class="result-header">
+                <span class="result-title" id="resultTitle"></span>
+                <span class="result-meta" id="resultMeta"></span>
+            </div>
+
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('rendered')">预览</div>
+                <div class="tab" onclick="switchTab('source')">Markdown 源码</div>
+                <div class="tab" onclick="switchTab('images')">图片</div>
+            </div>
+
+            <div id="tab-rendered" class="tab-content active">
+                <div class="markdown-rendered" id="renderedContent"></div>
+            </div>
+            <div id="tab-source" class="tab-content">
+                <div style="display:flex;justify-content:flex-end;padding:8px 8px 0;">
+                    <button class="copy-btn" onclick="copyMarkdown()">📋 复制</button>
+                </div>
+                <div class="markdown-source" id="sourceContent"></div>
+            </div>
+            <div id="tab-images" class="tab-content">
+                <div class="images-grid" id="imagesGrid"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentMarkdown = '';
+
+        const urlInput = document.getElementById('urlInput');
+        urlInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') parseURL();
+        });
+
+        async function parseURL() {
+            const url = urlInput.value.trim();
+            if (!url) return;
+
+            const btn = document.getElementById('parseBtn');
+            const status = document.getElementById('status');
+            const result = document.getElementById('result');
+
+            btn.disabled = true;
+            btn.textContent = '提取中...';
+            result.classList.remove('show');
+            status.className = 'status loading';
+            status.innerHTML = '<span class="spinner"></span>正在提取内容，请稍候...';
+
+            try {
+                const resp = await fetch('/parse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: url,
+                        use_dynamic: document.getElementById('dynamicMode').checked
+                    })
+                });
+                const data = await resp.json();
+
+                if (!data.success) {
+                    status.className = 'status error';
+                    status.textContent = '❌ ' + (data.error || '提取失败');
+                    return;
+                }
+
+                currentMarkdown = data.markdown || '';
+                const localMarkdown = data.markdown_with_local_images || currentMarkdown;
+
+                // Success status
+                const charCount = currentMarkdown.length;
+                const imgCount = data.images ? Object.keys(data.images).length : 0;
+                status.className = 'status success';
+                status.textContent = `✅ 提取成功 — ${charCount} 字符, ${imgCount} 张图片`;
+
+                // Title
+                document.getElementById('resultTitle').textContent = data.title || 'Untitled';
+                document.getElementById('resultMeta').textContent = `${charCount} chars`;
+
+                // Rendered preview
+                document.getElementById('renderedContent').innerHTML = simpleMarkdownToHtml(localMarkdown);
+
+                // Source
+                document.getElementById('sourceContent').textContent = currentMarkdown;
+
+                // Images
+                const grid = document.getElementById('imagesGrid');
+                grid.innerHTML = '';
+                if (data.images && Object.keys(data.images).length > 0) {
+                    for (const [origUrl, filename] of Object.entries(data.images)) {
+                        const img = document.createElement('img');
+                        img.src = `/api/images/${filename}`;
+                        img.alt = filename;
+                        img.title = origUrl;
+                        img.onclick = () => window.open(img.src, '_blank');
+                        grid.appendChild(img);
+                    }
+                } else {
+                    grid.innerHTML = '<p style="color:#737373;padding:8px;">无图片</p>';
+                }
+
+                result.classList.add('show');
+                switchTab('rendered');
+
+            } catch (err) {
+                status.className = 'status error';
+                status.textContent = '❌ 网络错误: ' + err.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '提取';
+            }
+        }
+
+        function switchTab(name) {
+            document.querySelectorAll('.tab').forEach((t, i) => {
+                const tabs = ['rendered', 'source', 'images'];
+                t.classList.toggle('active', tabs[i] === name);
+            });
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById('tab-' + name).classList.add('active');
+        }
+
+        function copyMarkdown() {
+            navigator.clipboard.writeText(currentMarkdown).then(() => {
+                const btn = document.querySelector('.copy-btn');
+                btn.textContent = '✅ 已复制';
+                setTimeout(() => btn.textContent = '📋 复制', 1500);
+            });
+        }
+
+        function simpleMarkdownToHtml(md) {
+            if (!md) return '';
+            let html = md
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                // Images
+                .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">')
+                // Links
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+                // Headers
+                .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                // Bold & italic
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                // Code blocks
+                .replace(/```[\s\S]*?```/g, m => {
+                    const code = m.slice(3, -3).replace(/^\w*\n/, '');
+                    return '<pre><code>' + code + '</code></pre>';
+                })
+                // Inline code
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                // Blockquotes
+                .replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
+                // HR
+                .replace(/^---$/gm, '<hr>')
+                // Paragraphs
+                .replace(/\n\n/g, '</p><p>')
+                .replace(/\n/g, '<br>');
+            return '<p>' + html + '</p>';
+        }
+    </script>
+</body>
+</html>

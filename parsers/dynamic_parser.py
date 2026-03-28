@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 
 from .base_parser import BaseParser, ParseResult, MediaInfo
-from ..media_handler import MediaHandler
+from media_handler import MediaHandler
 
 
 class DynamicParser(BaseParser):
