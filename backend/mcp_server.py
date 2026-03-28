@@ -561,12 +561,10 @@ async def streamable_http_handler(scope, receive, send):
 async def run_server(host: str = "0.0.0.0", port: int = 8001):
     """Run the MCP server using ASGI/UVicorn with Streamable HTTP."""
     import uvicorn
-    from starlette.applications import Starlette
-    from starlette.routing import Route
+    from starlette.routing import Mount
 
-    app = Starlette(
-        routes=[Route("/", streamable_http_handler, methods=["POST"])],
-    )
+    # Mount the ASGI app directly - no Starlette routing needed
+    app = streamable_http_handler
 
     logger.info(f"Starting link2context MCP server on {host}:{port}")
     logger.info(f"Backend URL: {BACKEND_URL}")
